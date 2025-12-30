@@ -1,0 +1,84 @@
+# SeedShield Docker Compose Configuration
+# Development and production stack
+
+version: '3.8'
+
+services:
+  # ===========================================
+  # Backend API Service
+  # ===========================================
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: seedshield-api
+    ports:
+      - "8000:8000"
+    environment:
+      - SEEDSHIELD_DEMO_MODE=${DEMO_MODE:-false}
+      - PYTHONPATH=/app
+    volumes:
+      # Mount model weights for persistence
+      - ./models/weights:/app/models/weights
+      # Mount dataset directory (optional)
+      - ./dataset:/app/dataset
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:8000/health" ]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+
+  # ===========================================
+  # Frontend Development Server (optional)
+  # ===========================================
+  frontend:
+    image: node:18-alpine
+    container_name: seedshield-frontend
+    working_dir: /app
+    ports:
+      - "3000:3000"
+    environment:
+      - REACT_APP_API_URL=http://localhost:8000
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    command: sh -c "npm install && npm start"
+    depends_on:
+      - api
+    profiles:
+      - development
+
+  # ===========================================
+  # Nginx Reverse Proxy (Production)
+  # ===========================================
+  nginx:
+    image: nginx:alpine
+    container_name: seedshield-nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./deployment/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./frontend/build:/usr/share/nginx/html:ro
+    depends_on:
+      - api
+    restart: unless-stopped
+    profiles:
+      - production
+
+# ===========================================
+# Networks
+# ===========================================
+networks:
+  default:
+    name: seedshield-network
+    driver: bridge
+
+# ===========================================
+# Volumes
+# ===========================================
+volumes:
+  model-weights:
+    driver: local
