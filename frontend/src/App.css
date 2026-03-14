@@ -729,3 +729,42 @@ body {
     padding: 2rem;
   }
 }
+/* ================== VERDICT TOTAL ================== */
+.verdict-total {
+  font-size: 0.8125rem;
+  margin-top: 0.375rem;
+  opacity: 0.75;
+  font-weight: 500;
+}
+
+/* ================== FARMER RECOMMENDATION ================== */
+.farmer-recommendation {
+  border-left: 4px solid var(--tip-border);
+}
+
+.farmer-recommendation.genuine {
+  background: var(--primary-green-light);
+  border-color: var(--success-green);
+}
+
+.farmer-recommendation.genuine .tip-text {
+  color: var(--primary-green-dark);
+}
+
+.farmer-recommendation.suspected_fake {
+  background: #fee2e2;
+  border-color: var(--danger-red);
+}
+
+.farmer-recommendation.suspected_fake .tip-text {
+  color: #b91c1c;
+}
+
+.farmer-recommendation.low_quality {
+  background: #fef3c7;
+  border-color: var(--warning-yellow);
+}
+
+.farmer-recommendation.low_quality .tip-text {
+  color: #92400e;
+}
