@@ -10,14 +10,12 @@ function App() {
     const [screen, setScreen] = useState('instructions'); // 'instructions', 'upload', 'loading', 'results'
     const [selectedFile, setSelectedFile] = useState(null);
     const [previewUrl, setPreviewUrl] = useState(null);
-    const [isLoading, setIsLoading] = useState(false);
     const [results, setResults] = useState(null);
     const [error, setError] = useState(null);
     const [isDragging, setIsDragging] = useState(false);
     const [imageQuality, setImageQuality] = useState(null);
 
     const fileInputRef = useRef(null);
-    const canvasRef = useRef(null);
 
     // Analyze image quality (brightness, contrast, and seed content detection)
     const analyzeImageQuality = useCallback((imageData) => {
@@ -270,7 +268,6 @@ function App() {
     const analyzeImage = async () => {
         if (!selectedFile) return;
 
-        setIsLoading(true);
         setScreen('loading');
         setError(null);
 
@@ -278,7 +275,7 @@ function App() {
             const formData = new FormData();
             formData.append('file', selectedFile);
 
-            const response = await axios.post(`${API_URL}/predict`, formData, {
+            const response = await axios.post(`${API_URL}/predict?return_image=true`, formData, {
                 headers: {
                     'Content-Type': 'multipart/form-data',
                 },
@@ -294,8 +291,6 @@ function App() {
                 'Failed to analyze image. Please try again.'
             );
             setScreen('upload');
-        } finally {
-            setIsLoading(false);
         }
     };
 
@@ -328,6 +323,20 @@ function App() {
             case 'suspected_fake': return '❌';
             case 'low_quality': return '⚠️';
             default: return '❓';
+        }
+    };
+
+    // Get farmer recommendation based on verdict
+    const getFarmerRecommendation = (verdict) => {
+        switch (verdict) {
+            case 'genuine':
+                return '✅ These seeds appear to be genuine. They are safe to use for planting. Store in a cool, dry place.';
+            case 'suspected_fake':
+                return '❌ WARNING: Fake seeds detected! Do NOT use these seeds for planting. Contact your supplier and report this to the nearest Agriculture Department.';
+            case 'low_quality':
+                return '⚠️ These seeds have quality issues. Some may be damaged or shriveled. Select only healthy-looking seeds before planting. Consider buying a fresh batch.';
+            default:
+                return '❓ Analysis complete. Please review the results carefully before using these seeds.';
         }
     };
 
@@ -515,12 +524,10 @@ function App() {
                 {selectedFile ? (
                     <>
                         <button
-                            className={`btn-blue ${imageQuality && !imageQuality.overallOk ? 'btn-disabled' : ''}`}
+                            className="btn-blue"
                             onClick={analyzeImage}
-                            disabled={imageQuality && !imageQuality.overallOk}
-                            style={imageQuality && !imageQuality.overallOk ? { opacity: 0.5, cursor: 'not-allowed' } : {}}
                         >
-                            {imageQuality && !imageQuality.overallOk ? 'Invalid Image' : 'Analyze Seeds'}
+                            Analyze Seeds
                         </button>
                         <button className="btn-secondary" onClick={removeFile}>
                             Retake Photo
@@ -551,6 +558,9 @@ function App() {
             <div className={`verdict-card ${results.verdict}`}>
                 <div className="verdict-icon">{getVerdictIcon(results.verdict)}</div>
                 <div className="verdict-message">{results.verdict_message}</div>
+                <div className="verdict-total">
+                    {results.total_seeds} seed{results.total_seeds !== 1 ? 's' : ''} analysed
+                </div>
             </div>
 
             {/* Statistics Grid */}
@@ -572,6 +582,15 @@ function App() {
                     <div className="stat-value">{results.low_quality_count}</div>
                     <div className="stat-percent">{results.low_quality_percentage}%</div>
                 </div>
+            </div>
+
+            {/* Farmer Recommendation */}
+            <div className={`tip-box farmer-recommendation ${results.verdict}`}>
+                <span className="tip-icon">👨‍🌾</span>
+                <span className="tip-text">
+                    <strong>Farmer Advice: </strong>
+                    {getFarmerRecommendation(results.verdict)}
+                </span>
             </div>
 
             {/* Annotated Image */}
@@ -603,14 +622,6 @@ function App() {
                     </div>
                 </div>
             )}
-
-            {/* Tip Box */}
-            <div className="tip-box">
-                <span className="tip-icon">💡</span>
-                <span className="tip-text">
-                    <strong>Tip:</strong> Seeds with unusual color, texture, or shape may be flagged as fake or low quality.
-                </span>
-            </div>
 
             {/* Actions */}
             <div className="actions">
