@@ -3,7 +3,7 @@ import axios from 'axios';
 import { motion, AnimatePresence } from 'framer-motion';
 import { PieChart, Pie, Cell, Tooltip as RechartTooltip, Legend as RechartLegend } from 'recharts';
 
-const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:8000';
+const API_URL = process.env.REACT_APP_API_URL || 'https://seedshield-backend.onrender.com';
 
 const DETECTION_COLORS = {
   REAL: '#22c55e',
