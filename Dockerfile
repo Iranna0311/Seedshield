@@ -23,7 +23,7 @@ RUN npm run build
 # ============================================
 # Stage 2: Production Backend
 # ============================================
-FROM python:3.10-slim
+FROM python:3.10.17-slim
 
 # Set environment variables
 ENV PYTHONDONTWRITEBYTECODE=1
@@ -39,6 +39,9 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libxext6 \
     libxrender-dev \
     && rm -rf /var/lib/apt/lists/*
+
+# Create non-root user
+RUN useradd -m -u 1000 appuser
 
 # Create app directory
 WORKDIR /app
@@ -67,6 +70,9 @@ EXPOSE 8000
 # Health check
 HEALTHCHECK --interval=30s --timeout=30s --start-period=10s --retries=3 \
     CMD curl -f http://localhost:8000/health || exit 1
+
+# Switch to non-root user
+USER appuser
 
 # Run the application
 CMD ["uvicorn", "api.main:app", "--host", "0.0.0.0", "--port", "8000"]

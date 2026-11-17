@@ -47,3 +47,17 @@ dataset/
 .vscode/
 .idea/
 *.swp
+
+# Model weights (large files)
+models/weights/*.pt
+models/weights/*.h5
+models/weights/*.keras
+models/weights/*.onnx
+models/weights/*.tflite
+# Keep the directory structure
+!models/weights/.gitkeep
+# Env files
+.env
+# Large files
+*.joblib
+*.pkl

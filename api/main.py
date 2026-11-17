@@ -7,6 +7,7 @@ import os
 import sys
 import io
 import time
+import uuid
 import base64
 from pathlib import Path
 from typing import Optional
@@ -14,13 +15,15 @@ from contextlib import asynccontextmanager
 import logging
 
 # FastAPI imports
-from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks
+from fastapi import FastAPI, File, UploadFile, HTTPException, Query, BackgroundTasks, Request, Response
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.concurrency import run_in_threadpool
+from starlette.middleware.base import BaseHTTPMiddleware
 import uvicorn
 
 # Image processing
-from PIL import Image
+from PIL import Image, ImageOps
 import numpy as np
 import cv2
 
@@ -93,6 +96,7 @@ async def lifespan(app: FastAPI):
             logger.info("Falling back to demo mode")
             pipeline = None
     
+    app.state.pipeline = pipeline
     yield
     
     # Cleanup
@@ -126,16 +130,32 @@ app = FastAPI(
 # CORS configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # Configure appropriately for production
+    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+# Request-ID middleware
+class RequestIDMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request: Request, call_next):
+        request_id = str(uuid.uuid4())
+        start = time.time()
+        response: Response = await call_next(request)
+        elapsed_ms = (time.time() - start) * 1000
+        logger.info(f"{request.method} {request.url.path} → {response.status_code} in {elapsed_ms:.1f}ms [rid={request_id}]")
+        response.headers["X-Request-ID"] = request_id
+        return response
+
+app.add_middleware(RequestIDMiddleware)
+
+
 # Constants
 ALLOWED_EXTENSIONS = {".jpg", ".jpeg", ".png", ".webp", ".bmp"}
-MAX_FILE_SIZE = 10 * 1024 * 1024  # 10 MB
+MAX_BYTES = 8 * 1024 * 1024  # 8 MB
+MAX_FILE_SIZE = MAX_BYTES  # keep old name for compat
+Image.MAX_IMAGE_PIXELS = 25_000_000
 
 
 def validate_image(file: UploadFile) -> bool:
@@ -222,31 +242,10 @@ def process_demo_image(image: np.ndarray) -> dict:
                 valid_contours.append(cnt)
     
     if len(valid_contours) == 0:
-        # Still nothing - create one detection at center of image
-        center_x, center_y = w // 2, h // 2
-        size_w, size_h = min(100, w // 3), min(80, h // 3)
-        
-        # Deterministic classification based on image mean color
-        mean_color = np.mean(image)
-        if mean_color > 150:
-            cls = 'REAL'
-            conf = 0.85
-        elif mean_color > 100:
-            cls = 'LOW_QUALITY'
-            conf = 0.75
-        else:
-            cls = 'FAKE'
-            conf = 0.80
-            
-        detections.append({
-            'id': 0,
-            'bbox': (center_x - size_w // 2, center_y - size_h // 2, size_w, size_h),
-            'class_name': cls,
-            'class_id': CLASS_NAMES.index(cls),
-            'detection_confidence': conf,
-            'classification_confidence': conf,
-            'confidence': conf
-        })
+        raise HTTPException(
+            status_code=400,
+            detail="No seeds detected in this image. Only seed photos are accepted. Please place seeds on a plain background and try again."
+        )
     else:
         # Create detections from actual contours - DETERMINISTIC classification
         # Sort by area (largest first) and limit to 100 seeds max
@@ -360,6 +359,16 @@ async def health_check():
     )
 
 
+@app.get("/ready", tags=["Health"])
+async def ready_check():
+    """Readiness probe."""
+    return {
+        "ready": True,
+        "models_loaded": pipeline is not None,
+        "model_version": "1.0.0-sklearn",
+    }
+
+
 @app.post("/predict",
           response_model=PredictionResponse,
           responses={400: {"model": ErrorResponse}, 500: {"model": ErrorResponse}},
@@ -397,33 +406,44 @@ async def predict(
         # Validate file
         validate_image(file)
         
-        # Read image
-        contents = await file.read()
-        if len(contents) > MAX_FILE_SIZE:
+        # Read image with size cap
+        contents = await file.read(MAX_BYTES + 1)
+        if len(contents) > MAX_BYTES:
             raise HTTPException(
-                status_code=400,
-                detail=f"File too large. Maximum size: {MAX_FILE_SIZE // 1024 // 1024} MB"
+                status_code=413,
+                detail=f"File too large. Maximum size: {MAX_BYTES // 1024 // 1024} MB"
             )
         
-        # Convert to numpy array
-        nparr = np.frombuffer(contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        # PIL validation + EXIF correction
+        try:
+            img_pil = Image.open(io.BytesIO(contents))
+            img_pil.verify()
+            img_pil = Image.open(io.BytesIO(contents))  # reopen after verify
+            img_pil = ImageOps.exif_transpose(img_pil)
+            img_pil = img_pil.convert("RGB")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image")
         
-        if image is None:
-            raise HTTPException(
-                status_code=400,
-                detail="Could not decode image. Please upload a valid image file."
-            )
+        # Convert validated PIL image to OpenCV BGR for downstream code
+        image = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
         logger.info(f"Processing image: {file.filename}, shape: {image.shape}")
         
         # Process image
         if pipeline is not None:
-            # Use actual pipeline
-            result = pipeline.process_image(
-                image,
-                return_annotated=return_image
-            )
+            # Use actual pipeline (blocking call → threadpool)
+            try:
+                result = await run_in_threadpool(
+                    pipeline.process_image, image, return_image
+                )
+            except ValueError as ve:
+                raise HTTPException(status_code=400, detail=str(ve))
+
+            if result.total_seeds == 0:
+                raise HTTPException(
+                    status_code=400,
+                    detail="No seeds detected in this image. Only seed photos are accepted. Please place seeds on a plain background and try again."
+                )
             
             response_data = {
                 'success': True,
@@ -431,11 +451,16 @@ async def predict(
                 'real_count': result.real_count,
                 'fake_count': result.fake_count,
                 'low_quality_count': result.low_quality_count,
+                'uncertain_count': result.uncertain_count,
                 'real_percentage': result.real_percentage,
                 'fake_percentage': result.fake_percentage,
                 'low_quality_percentage': result.low_quality_percentage,
+                'uncertain_percentage': result.uncertain_percentage,
                 'verdict': result.verdict,
                 'verdict_message': result.verdict_message,
+                'ci95': result.ci95,
+                'model_version': result.model_version,
+                'scan_id': result.scan_id,
                 'detections': result.detections,
                 'annotated_image_base64': result.annotated_image_base64 if return_image else None
             }
@@ -446,6 +471,11 @@ async def predict(
             response_data = {
                 'success': True,
                 **demo_result,
+                'uncertain_count': 0,
+                'uncertain_percentage': 0.0,
+                'ci95': [0.0, 0.0],
+                'model_version': '1.0.0-sklearn',
+                'scan_id': str(uuid.uuid4()),
                 'annotated_image_base64': demo_result['annotated_image_base64'] if return_image else None
             }
             # Convert detections to proper format
@@ -456,7 +486,9 @@ async def predict(
                     'class_name': d['class_name'],
                     'class_id': d['class_id'],
                     'detection_confidence': d['detection_confidence'],
-                    'classification_confidence': d['classification_confidence']
+                    'classification_confidence': d['classification_confidence'],
+                    'bbox_norm': d.get('bbox_norm', [0.0, 0.0, 0.0, 0.0]),
+                    'probs': d.get('probs', {"REAL": 0.0, "FAKE": 0.0, "LOW_QUALITY": 0.0}),
                 }
                 for d in demo_result['detections']
             ]
@@ -502,9 +534,21 @@ async def predict_image_only(
     try:
         # Validate and process
         validate_image(file)
-        contents = await file.read()
-        nparr = np.frombuffer(contents, np.uint8)
-        image = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        contents = await file.read(MAX_BYTES + 1)
+        if len(contents) > MAX_BYTES:
+            raise HTTPException(status_code=413, detail="File too large. Maximum size: 8 MB")
+
+        # PIL validation + EXIF correction
+        try:
+            img_pil = Image.open(io.BytesIO(contents))
+            img_pil.verify()
+            img_pil = Image.open(io.BytesIO(contents))
+            img_pil = ImageOps.exif_transpose(img_pil)
+            img_pil = img_pil.convert("RGB")
+        except Exception:
+            raise HTTPException(status_code=400, detail="Invalid image")
+
+        image = cv2.cvtColor(np.array(img_pil), cv2.COLOR_RGB2BGR)
         
         if image is None:
             raise HTTPException(status_code=400, detail="Invalid image")

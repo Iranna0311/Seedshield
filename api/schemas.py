@@ -13,6 +13,7 @@ class SeedClass(str, Enum):
     REAL = "REAL"
     FAKE = "FAKE"
     LOW_QUALITY = "LOW_QUALITY"
+    UNCERTAIN = "UNCERTAIN"
 
 
 class VerdictType(str, Enum):
@@ -35,9 +36,11 @@ class SeedDetectionResult(BaseModel):
     id: int = Field(..., description="Unique ID for this detection")
     bbox: List[int] = Field(..., description="Bounding box [x, y, width, height]")
     class_name: SeedClass = Field(..., description="Classification result")
-    class_id: int = Field(..., description="Class ID (0=REAL, 1=FAKE, 2=LOW_QUALITY)")
+    class_id: int = Field(..., description="Class ID (0=REAL, 1=FAKE, 2=LOW_QUALITY, 3=UNCERTAIN)")
     detection_confidence: float = Field(..., ge=0, le=1, description="Detection confidence")
     classification_confidence: float = Field(..., ge=0, le=1, description="Classification confidence")
+    bbox_norm: List[float] = Field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0], description="Normalized bbox [x/w, y/h, bw/w, bh/h]")
+    probs: Dict[str, float] = Field(default_factory=lambda: {"REAL": 0.0, "FAKE": 0.0, "LOW_QUALITY": 0.0}, description="Per-class probabilities")
     
     class Config:
         use_enum_values = True
@@ -52,15 +55,22 @@ class PredictionResponse(BaseModel):
     real_count: int = Field(..., ge=0, description="Number of real seeds")
     fake_count: int = Field(..., ge=0, description="Number of fake seeds")
     low_quality_count: int = Field(..., ge=0, description="Number of low quality seeds")
+    uncertain_count: int = Field(0, ge=0, description="Number of uncertain seeds")
     
     # Percentages
     real_percentage: float = Field(..., ge=0, le=100, description="Percentage of real seeds")
     fake_percentage: float = Field(..., ge=0, le=100, description="Percentage of fake seeds")
     low_quality_percentage: float = Field(..., ge=0, le=100, description="Percentage of low quality seeds")
+    uncertain_percentage: float = Field(0.0, ge=0, le=100, description="Percentage of uncertain seeds")
     
     # Verdict
     verdict: VerdictType = Field(..., description="Final verdict")
     verdict_message: str = Field(..., description="Human-readable verdict message")
+    
+    # Statistical extras
+    ci95: List[float] = Field(default_factory=lambda: [0.0, 0.0], description="95% Wilson CI for fake proportion [low, high]")
+    model_version: str = Field("", description="Model version string")
+    scan_id: str = Field("", description="Unique scan identifier (uuid4)")
     
     # Detections
     detections: List[SeedDetectionResult] = Field(default_factory=list, description="Individual seed detections")
@@ -77,11 +87,16 @@ class PredictionResponse(BaseModel):
                 "real_count": 7,
                 "fake_count": 2,
                 "low_quality_count": 1,
+                "uncertain_count": 0,
                 "real_percentage": 70.0,
                 "fake_percentage": 20.0,
                 "low_quality_percentage": 10.0,
+                "uncertain_percentage": 0.0,
                 "verdict": "genuine",
                 "verdict_message": "✅ Mostly Genuine",
+                "ci95": [0.025, 0.415],
+                "model_version": "1.0.0-sklearn",
+                "scan_id": "xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx",
                 "detections": [
                     {
                         "id": 0,
@@ -89,7 +104,9 @@ class PredictionResponse(BaseModel):
                         "class_name": "REAL",
                         "class_id": 0,
                         "detection_confidence": 0.95,
-                        "classification_confidence": 0.92
+                        "classification_confidence": 0.92,
+                        "bbox_norm": [0.1, 0.15, 0.05, 0.045],
+                        "probs": {"REAL": 0.92, "FAKE": 0.05, "LOW_QUALITY": 0.03}
                     }
                 ],
                 "annotated_image_base64": "..."

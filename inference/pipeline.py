@@ -8,10 +8,11 @@ No GPU or deep learning framework required.
 import os
 import sys
 import json
+import uuid
 import joblib
 from pathlib import Path
 from typing import Dict, List, Tuple, Optional, Union
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, field, asdict
 import warnings
 warnings.filterwarnings('ignore')
 
@@ -46,6 +47,19 @@ except ImportError:
     )
 
 
+def wilson(k: int, n: int, z: float = 1.96) -> Tuple[float, float]:
+    """Wilson score confidence interval for proportion k/n."""
+    if n == 0:
+        return (0.0, 0.0)
+    p = k / n
+    denom = 1 + z * z / n
+    centre = (p + z * z / (2 * n)) / denom
+    spread = z * ((p * (1 - p) / n + z * z / (4 * n * n)) ** 0.5) / denom
+    low = max(0.0, centre - spread)
+    high = min(1.0, centre + spread)
+    return (low, high)
+
+
 @dataclass
 class SeedDetection:
     """Data class for a single seed detection."""
@@ -55,6 +69,8 @@ class SeedDetection:
     class_id: int
     detection_confidence: float
     classification_confidence: float
+    bbox_norm: List[float] = field(default_factory=lambda: [0.0, 0.0, 0.0, 0.0])
+    probs: Dict[str, float] = field(default_factory=lambda: {"REAL": 0.0, "FAKE": 0.0, "LOW_QUALITY": 0.0})
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -74,6 +90,11 @@ class InferenceResult:
     verdict_message: str
     detections: List[Dict]
     annotated_image_base64: Optional[str] = None
+    uncertain_count: int = 0
+    uncertain_percentage: float = 0.0
+    ci95: List[float] = field(default_factory=lambda: [0.0, 0.0])
+    model_version: str = "1.0.0-sklearn"
+    scan_id: str = ""
 
     def to_dict(self) -> dict:
         result = asdict(self)
@@ -450,36 +471,25 @@ class SeedShieldPipeline:
                 'detection_confidence': det_conf,
             })
 
-        if not detections:
-            # Fallback: treat whole image centre as one detection
-            cx, cy = w // 2, h // 2
-            sz_w, sz_h = min(120, w // 3), min(90, h // 3)
-            dummy_cnt = np.array([
-                [[cx - sz_w // 2, cy - sz_h // 2]],
-                [[cx + sz_w // 2, cy - sz_h // 2]],
-                [[cx + sz_w // 2, cy + sz_h // 2]],
-                [[cx - sz_w // 2, cy + sz_h // 2]],
-            ], dtype=np.int32)
-            detections.append({
-                'id': 0,
-                'bbox': (cx - sz_w // 2, cy - sz_h // 2, sz_w, sz_h),
-                'contour': dummy_cnt,
-                'detection_confidence': 0.55,
-            })
-
         return detections
 
     # ------------------------------------------------------------------
     # Seed classification
     # ------------------------------------------------------------------
 
-    def classify_seed(self, roi: np.ndarray, contour: np.ndarray) -> Tuple[str, int, float]:
-        """Classify a single seed.  Returns (class_name, class_id, confidence)."""
+    def classify_seed(self, roi: np.ndarray, contour: np.ndarray) -> Tuple[str, int, float, np.ndarray]:
+        """Classify a single seed.  Returns (class_name, class_id, confidence, proba_arr)."""
         feats = _extract_seed_features(roi, contour).reshape(1, -1)
         proba = self._classifier.predict_proba(feats)[0]
-        class_id = int(np.argmax(proba))
-        confidence = float(proba[class_id])
-        return CLASS_NAMES[class_id], class_id, confidence
+        if max(proba) < 0.6:
+            class_name = "UNCERTAIN"
+            class_id = 3
+            confidence = float(max(proba))
+        else:
+            class_id = int(np.argmax(proba))
+            confidence = float(proba[class_id])
+            class_name = CLASS_NAMES[class_id]
+        return class_name, class_id, confidence, proba
 
     # ------------------------------------------------------------------
     # Verdict
@@ -524,23 +534,40 @@ class SeedShieldPipeline:
             x, y, bw, bh = det['bbox']
             roi = image[max(0, y):min(h, y + bh), max(0, x):min(w, x + bw)]
             if roi.size > 0:
-                cls_name, cls_id, conf = self.classify_seed(roi, det['contour'])
+                cls_name, cls_id, conf, proba = self.classify_seed(roi, det['contour'])
             else:
                 cls_name, cls_id, conf = 'REAL', 0, 0.5
+                proba = np.array([0.5, 0.25, 0.25])
             det['class_name'] = cls_name
             det['class_id'] = cls_id
             det['classification_confidence'] = round(conf, 4)
             det['confidence'] = round(conf, 4)
+            # Normalized bbox
+            det['bbox_norm'] = [
+                x / w, y / h, bw / w, bh / h
+            ]
+            # Per-class probabilities (proba has 3 entries: REAL, FAKE, LOW_QUALITY)
+            det['probs'] = {
+                "REAL": float(proba[0]),
+                "FAKE": float(proba[1]),
+                "LOW_QUALITY": float(proba[2]),
+            }
 
         # Statistics
         total = len(detections)
+        if total == 0:
+            raise ValueError("No seeds detected in this image. Only seed photos are accepted. Please place seeds on a plain background and try again.")
         real_n = sum(1 for d in detections if d['class_name'] == 'REAL')
         fake_n = sum(1 for d in detections if d['class_name'] == 'FAKE')
         lq_n   = sum(1 for d in detections if d['class_name'] == 'LOW_QUALITY')
+        uncertain_n = sum(1 for d in detections if d['class_name'] == 'UNCERTAIN')
 
         r_pct  = real_n / total * 100 if total else 0.0
         f_pct  = fake_n / total * 100 if total else 0.0
         lq_pct = lq_n  / total * 100 if total else 0.0
+        u_pct  = uncertain_n / total * 100 if total else 0.0
+
+        ci_low, ci_high = wilson(fake_n, total)
 
         verdict_key, verdict_message = self.calculate_verdict(detections)
 
@@ -572,8 +599,15 @@ class SeedShieldPipeline:
                 class_id=d['class_id'],
                 detection_confidence=d['detection_confidence'],
                 classification_confidence=d['classification_confidence'],
+                bbox_norm=d['bbox_norm'],
+                probs=d['probs'],
             ).to_dict() for d in detections],
             annotated_image_base64=annotated_b64,
+            uncertain_count=uncertain_n,
+            uncertain_percentage=round(u_pct, 2),
+            ci95=[round(ci_low, 6), round(ci_high, 6)],
+            model_version="1.0.0-sklearn",
+            scan_id=str(uuid.uuid4()),
         )
         return result
 
@@ -600,18 +634,28 @@ def create_demo_prediction() -> List[Dict]:
     detections = []
     for i in range(8):
         cls = rng.choice(['REAL', 'FAKE', 'LOW_QUALITY'], p=[0.6, 0.2, 0.2])
+        cls = str(cls)
+        x = int(rng.integers(50, 400))
+        y = int(rng.integers(50, 400))
+        bw = int(rng.integers(40, 90))
+        bh = int(rng.integers(40, 90))
+        # Synthetic probs consistent with class
+        if cls == 'REAL':
+            probs = {"REAL": 0.80, "FAKE": 0.10, "LOW_QUALITY": 0.10}
+        elif cls == 'FAKE':
+            probs = {"REAL": 0.10, "FAKE": 0.80, "LOW_QUALITY": 0.10}
+        else:
+            probs = {"REAL": 0.10, "FAKE": 0.10, "LOW_QUALITY": 0.80}
         detections.append({
             'id': i,
-            'bbox': (
-                int(rng.integers(50, 400)),
-                int(rng.integers(50, 400)),
-                int(rng.integers(40, 90)),
-                int(rng.integers(40, 90)),
-            ),
-            'class_name': str(cls),
-            'class_id': CLASS_NAMES.index(str(cls)),
+            'seed_id': f"demo-{i}",
+            'bbox': (x, y, bw, bh),
+            'bbox_norm': [x / 640.0, y / 640.0, bw / 640.0, bh / 640.0],
+            'class_name': cls,
+            'class_id': CLASS_NAMES.index(cls),
             'detection_confidence': float(rng.uniform(0.70, 0.99)),
             'classification_confidence': float(rng.uniform(0.70, 0.99)),
+            'probs': probs,
         })
     return detections
 
