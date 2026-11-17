@@ -66,10 +66,21 @@ seedshield/
 │   ├── schemas.py                 # Pydantic models
 │   └── requirements.txt           # Python dependencies
 ├── frontend/
+│   ├── public/
+│   │   └── samples/               # Instant demo sample seed images
 │   ├── src/
-│   │   ├── App.js                 # Main React component
-│   │   └── App.css                # Styling
-│   └── package.json               # Node dependencies
+│   │   ├── components/            # Modular UI components
+│   │   │   ├── Navbar.js          # Navigation, theme toggle, scanner trigger
+│   │   │   ├── Hero3D.js          # Procedural Three.js 3D seed field
+│   │   │   ├── HowItWorks.js      # 3-step pipeline walkthrough
+│   │   │   ├── Features.js        # Feature breakdown cards
+│   │   │   ├── Scanner.js         # Interactive scanner, samples, history, JSON export
+│   │   │   ├── Limitations.js     # Honest limitations & scope disclosures
+│   │   │   ├── Roadmap.js         # Near/mid/long-term development roadmap
+│   │   │   └── Footer.js          # Footer with stack badges
+│   │   ├── App.js                 # App orchestrator & state
+│   │   └── App.css                # Cohesive design system & responsive styling
+│   └── package.json               # Node dependencies (Three.js, Framer Motion, Recharts)
 ├── deployment/
 │   ├── convert_to_tflite.py       # TFLite conversion
 │   └── convert_to_onnx.py         # ONNX conversion
