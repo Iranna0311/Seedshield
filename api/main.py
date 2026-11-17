@@ -127,10 +127,19 @@ app = FastAPI(
 )
 
 
-# CORS configuration
+# CORS configuration - Connected to Vercel and local dev
+raw_origins = os.getenv("ALLOWED_ORIGINS", "https://seedshield.vercel.app,http://localhost:3000,http://127.0.0.1:3000")
+if raw_origins == "*":
+    allowed_origins = ["*"]
+else:
+    allowed_origins = [o.strip() for o in raw_origins.split(",") if o.strip()]
+    if "https://seedshield.vercel.app" not in allowed_origins:
+        allowed_origins.append("https://seedshield.vercel.app")
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=os.getenv("ALLOWED_ORIGINS", "http://localhost:3000").split(","),
+    allow_origins=allowed_origins,
+    allow_origin_regex=r"https://.*\.vercel\.app",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
