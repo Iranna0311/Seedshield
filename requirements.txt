@@ -1,0 +1,2 @@
+# SeedShield Root Dependencies (Render & Production)
+-r api/requirements.txt
