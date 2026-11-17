@@ -59,7 +59,30 @@ def draw_seed_detection(
         Annotated image
     """
     result = image.copy()
+    overlay = result.copy()
     
+    # First pass: Draw translucent color fills for all seeds to make classes immediately visible
+    for det in detections:
+        bbox = det['bbox']
+        class_name = det.get('class_name', 'REAL')
+        x, y, w, h = [int(v) for v in bbox]
+        if class_name == 'FAKE':
+            # Prominent red translucent danger highlight on fake seeds
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 0, 255), -1)
+        elif class_name == 'REAL':
+            # Subtle emerald green highlight on authentic seeds
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 220, 80), -1)
+        elif class_name == 'LOW_QUALITY':
+            # Amber highlight for low quality
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (0, 200, 255), -1)
+        else:
+            # Grey highlight for uncertain
+            cv2.rectangle(overlay, (x, y), (x + w, y + h), (180, 180, 180), -1)
+            
+    # Blend overlay with image (28% fill opacity for fake, soft blend overall)
+    cv2.addWeighted(overlay, 0.28, result, 0.72, 0, result)
+
+    # Second pass: Draw crisp borders, tactical corner brackets, and labels
     for det in detections:
         bbox = det['bbox']
         class_name = det.get('class_name', 'REAL')
@@ -68,37 +91,60 @@ def draw_seed_detection(
         
         # Get color
         color = COLORS.get(class_name, (128, 128, 128))
-        
-        # Draw bounding box
         x, y, w, h = [int(v) for v in bbox]
-        cv2.rectangle(result, (x, y), (x + w, y + h), color, box_thickness)
+        
+        if class_name == 'FAKE':
+            # FAKE SEED: Double border & tactical corner brackets for alert effect
+            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 0, 255), max(3, box_thickness + 1))
+            corner_len = max(6, min(w, h) // 4)
+            # Corner accents
+            cv2.line(result, (x - 2, y - 2), (x + corner_len, y - 2), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x - 2, y - 2), (x - 2, y + corner_len), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x + w + 2, y - 2), (x + w - corner_len, y - 2), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x + w + 2, y - 2), (x + w + 2, y + corner_len), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x - 2, y + h + 2), (x + corner_len, y + h + 2), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x - 2, y + h + 2), (x - 2, y + h - corner_len), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x + w + 2, y + h + 2), (x + w - corner_len, y + h + 2), (0, 0, 255), max(3, box_thickness + 2))
+            cv2.line(result, (x + w + 2, y + h + 2), (x + w + 2, y + h - corner_len), (0, 0, 255), max(3, box_thickness + 2))
+            
+            prefix = "[!] FAKE"
+        elif class_name == 'REAL':
+            # REAL SEED: Crisp clean border
+            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 220, 80), box_thickness)
+            prefix = "[OK] REAL"
+        elif class_name == 'LOW_QUALITY':
+            cv2.rectangle(result, (x, y), (x + w, y + h), (0, 220, 255), box_thickness)
+            prefix = "[*] LOW"
+        else:
+            cv2.rectangle(result, (x, y), (x + w, y + h), (160, 160, 160), box_thickness)
+            prefix = "[?] UNCERTAIN"
         
         # Prepare label text
         if show_confidence:
-            label = f"{class_name}: {class_conf * 100:.1f}%"
+            label = f"{prefix}: {class_conf * 100:.1f}%"
         else:
-            label = class_name
+            label = prefix
         
         # Calculate label position
         label_size = cv2.getTextSize(label, cv2.FONT_HERSHEY_SIMPLEX, font_scale, font_thickness)[0]
-        label_x = x
-        label_y = y - 5 if y > 20 else y + h + 15
+        label_x = max(0, x)
+        label_y = y - 6 if y > 22 else y + h + label_size[1] + 8
         
         # Draw label background
         cv2.rectangle(
             result,
-            (label_x, label_y - label_size[1] - 5),
-            (label_x + label_size[0] + 5, label_y + 5),
+            (label_x, label_y - label_size[1] - 4),
+            (label_x + label_size[0] + 6, label_y + 4),
             color,
             -1
         )
         
         # Draw label text
-        text_color = (0, 0, 0) if class_name == "LOW_QUALITY" else (255, 255, 255)
+        text_color = (0, 0, 0) if class_name in ("LOW_QUALITY", "UNCERTAIN") else (255, 255, 255)
         cv2.putText(
             result,
             label,
-            (label_x + 2, label_y),
+            (label_x + 3, label_y),
             cv2.FONT_HERSHEY_SIMPLEX,
             font_scale,
             text_color,

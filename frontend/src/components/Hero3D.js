@@ -240,11 +240,6 @@ export default function Hero3D({ theme = 'light', onScanSample, onUploadOwn }) {
 
       {/* Hero Content Overlay */}
       <div className="hero-content">
-        <div className="hero-badge">
-          <span className="badge-pulse"></span>
-          <span>OpenCV + scikit-learn Hybrid Screening</span>
-        </div>
-
         <h1 className="hero-headline">
           Visual Seed Quality Screening for Farmers
         </h1>

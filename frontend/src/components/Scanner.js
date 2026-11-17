@@ -37,6 +37,8 @@ export default function Scanner() {
   const [hoveredDetection, setHoveredDetection] = useState(null);
   const [tooltipPos, setTooltipPos] = useState({ x: 0, y: 0 });
   const [scanHistory, setScanHistory] = useState([]);
+  const [filterClass, setFilterClass] = useState('ALL'); // 'ALL', 'FAKE', 'REAL', 'LOW_QUALITY'
+  const [viewMode, setViewMode] = useState('interactive'); // 'interactive', 'annotated'
   const overlayContainerRef = useRef(null);
   const fileInputRef = useRef(null);
 
@@ -295,6 +297,8 @@ export default function Scanner() {
     setResults(null);
     setError(null);
     setSelectedDetection(null);
+    setFilterClass('ALL');
+    setViewMode('interactive');
     setScreen('upload');
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -629,75 +633,388 @@ export default function Scanner() {
           </div>
         </div>
 
-        {/* Interactive SVG Overlay */}
+        {/* Interactive Visual Overlay & Effects */}
         {previewUrl && detections.length > 0 && (
           <div className="overlay-wrapper-card">
             <div className="overlay-header">
-              <span>🖼️ Interactive Seed Map (click any seed to inspect)</span>
-            </div>
-            <div
-              className="overlay-image-area"
-              ref={overlayContainerRef}
-            >
-              <img
-                src={previewUrl}
-                alt="Analyzed seed sample"
-                className="overlay-base-img"
-              />
-              <svg
-                className="overlay-svg-layer"
-                viewBox="0 0 1 1"
-                preserveAspectRatio="none"
-              >
-                <AnimatePresence>
-                  {detections.map((det, index) => {
-                    const bn = det.bbox_norm;
-                    if (!bn || bn.length < 4) return null;
-                    const [x, y, w, h] = bn;
-                    const color = DETECTION_COLORS[det.class_name] || DETECTION_COLORS.UNCERTAIN;
-                    return (
-                      <motion.rect
-                        key={det.id || index}
-                        x={x}
-                        y={y}
-                        width={w}
-                        height={h}
-                        fill="rgba(255,255,255,0.05)"
-                        stroke={color}
-                        strokeWidth={0.005}
-                        initial={{ opacity: 0 }}
-                        animate={{ opacity: 1 }}
-                        transition={{ delay: index * 0.04 }}
-                        style={{ cursor: 'pointer' }}
-                        onClick={() => setSelectedDetection(det)}
-                        onMouseMove={(e) => handleRectMouseMove(e, det)}
-                        onMouseLeave={handleRectMouseLeave}
-                      />
-                    );
-                  })}
-                </AnimatePresence>
-              </svg>
-
-              {/* Hover Tooltip */}
-              {hoveredDetection && (
-                <div
-                  className="interactive-tooltip"
-                  style={{
-                    left: tooltipPos.x + 10,
-                    top: tooltipPos.y - 36,
-                  }}
+              <div className="overlay-header-info">
+                <span className="overlay-title">🔍 Seed Quality Analysis Map</span>
+                <span className="overlay-subtitle">Click any seed to inspect features</span>
+              </div>
+              <div className="overlay-view-controls">
+                <button
+                  type="button"
+                  className={`overlay-mode-btn ${viewMode === 'interactive' ? 'active' : ''}`}
+                  onClick={() => setViewMode('interactive')}
                 >
-                  <strong>{hoveredDetection.class_name}</strong>{' '}
-                  {(hoveredDetection.confidence * 100).toFixed(1)}%
-                </div>
+                  ✨ Visual Effects
+                </button>
+                {results.annotated_image_base64 && (
+                  <button
+                    type="button"
+                    className={`overlay-mode-btn ${viewMode === 'annotated' ? 'active' : ''}`}
+                    onClick={() => setViewMode('annotated')}
+                  >
+                    🔬 Deep-Scan Photo
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Quick Filter Bar */}
+            <div className="overlay-filter-bar">
+              <span className="filter-label">Filter:</span>
+              <button
+                type="button"
+                className={`filter-chip ${filterClass === 'ALL' ? 'active' : ''}`}
+                onClick={() => setFilterClass('ALL')}
+              >
+                All ({detections.length})
+              </button>
+              <button
+                type="button"
+                className={`filter-chip fake ${filterClass === 'FAKE' ? 'active' : ''}`}
+                onClick={() => setFilterClass('FAKE')}
+              >
+                🚨 Fake Seeds ({results.fake_count})
+              </button>
+              <button
+                type="button"
+                className={`filter-chip real ${filterClass === 'REAL' ? 'active' : ''}`}
+                onClick={() => setFilterClass('REAL')}
+              >
+                ✓ Genuine Seeds ({results.real_count})
+              </button>
+              {results.low_quality_count > 0 && (
+                <button
+                  type="button"
+                  className={`filter-chip low ${filterClass === 'LOW_QUALITY' ? 'active' : ''}`}
+                  onClick={() => setFilterClass('LOW_QUALITY')}
+                >
+                  ⚠️ Low Quality ({results.low_quality_count})
+                </button>
               )}
             </div>
 
+            {/* Main Image Display Area */}
+            {viewMode === 'annotated' && results.annotated_image_base64 ? (
+              <div className="overlay-image-area">
+                <img
+                  src={`data:image/jpeg;base64,${results.annotated_image_base64}`}
+                  alt="Deep scan annotated analysis"
+                  className="overlay-base-img"
+                />
+              </div>
+            ) : (
+              <div
+                className="overlay-image-area"
+                ref={overlayContainerRef}
+              >
+                <img
+                  src={previewUrl}
+                  alt="Analyzed seed sample"
+                  className="overlay-base-img"
+                />
+                <svg
+                  className="overlay-svg-layer"
+                  viewBox="0 0 1 1"
+                  preserveAspectRatio="none"
+                >
+                  <defs>
+                    {/* Glowing drop shadow filter for fake seeds */}
+                    <filter id="fakeGlowFilter" x="-30%" y="-30%" width="160%" height="160%">
+                      <feDropShadow dx="0" dy="0" stdDeviation="0.007" floodColor="#ef4444" floodOpacity="0.9" />
+                      <feDropShadow dx="0" dy="0" stdDeviation="0.014" floodColor="#dc2626" floodOpacity="0.7" />
+                    </filter>
+
+                    {/* Verification glow filter for real seeds */}
+                    <filter id="realGlowFilter" x="-20%" y="-20%" width="140%" height="140%">
+                      <feDropShadow dx="0" dy="0" stdDeviation="0.004" floodColor="#22c55e" floodOpacity="0.8" />
+                    </filter>
+
+                    {/* Warning diagonal hatch pattern for fake seeds */}
+                    <pattern id="fakeHazardPattern" width="0.03" height="0.03" patternTransform="rotate(45 0 0)" patternUnits="userSpaceOnUse">
+                      <line x1="0" y1="0" x2="0" y2="0.03" stroke="rgba(239, 68, 68, 0.45)" strokeWidth="0.006" />
+                    </pattern>
+                  </defs>
+
+                  <AnimatePresence>
+                    {detections.map((det, index) => {
+                      const bn = det.bbox_norm;
+                      if (!bn || bn.length < 4) return null;
+                      const [x, y, w, h] = bn;
+                      const isFake = det.class_name === 'FAKE';
+                      const isReal = det.class_name === 'REAL';
+                      const isLow = det.class_name === 'LOW_QUALITY';
+                      const isDimmed = filterClass !== 'ALL' && filterClass !== det.class_name;
+                      const cLen = Math.min(w, h) * 0.35;
+                      const badgeW = Math.max(0.09, Math.min(w * 0.95, 0.14));
+                      const badgeH = 0.026;
+                      const badgeY = y > 0.035 ? y - badgeH - 0.004 : y + h + 0.004;
+
+                      return (
+                        <g
+                          key={det.id || index}
+                          className={`seed-detection-group ${isFake ? 'fake-seed-active' : ''} ${isDimmed ? 'dimmed' : ''}`}
+                          style={{
+                            cursor: 'pointer',
+                            opacity: isDimmed ? 0.18 : 1,
+                            transition: 'opacity 0.25s ease',
+                          }}
+                          onClick={() => setSelectedDetection(det)}
+                          onMouseMove={(e) => handleRectMouseMove(e, det)}
+                          onMouseLeave={handleRectMouseLeave}
+                        >
+                          {/* FAKE SEED SPECIAL EFFECTS */}
+                          {isFake && (
+                            <>
+                              {/* Pulsing outer aura ring */}
+                              <rect
+                                x={x - 0.006}
+                                y={y - 0.006}
+                                width={w + 0.012}
+                                height={h + 0.012}
+                                rx={0.006}
+                                fill="none"
+                                stroke="#ef4444"
+                                strokeWidth={0.004}
+                                strokeDasharray="0.02 0.01"
+                                className="fake-pulse-ring"
+                              />
+                              {/* Hazard striped fill */}
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="url(#fakeHazardPattern)"
+                              />
+                              {/* Alert red tint */}
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="rgba(239, 68, 68, 0.22)"
+                              />
+                              {/* Bold flashing main border */}
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="none"
+                                stroke="#ef4444"
+                                strokeWidth={0.008}
+                                filter="url(#fakeGlowFilter)"
+                                className="seed-fake-effect"
+                              />
+                              {/* Tactical Danger Corner Reticles */}
+                              <path
+                                d={`M ${x} ${y + cLen} L ${x} ${y} L ${x + cLen} ${y}
+                                    M ${x + w - cLen} ${y} L ${x + w} ${y} L ${x + w} ${y + cLen}
+                                    M ${x} ${y + h - cLen} L ${x} ${y + h} L ${x + cLen} ${y + h}
+                                    M ${x + w - cLen} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y + h - cLen}`}
+                                fill="none"
+                                stroke="#ffffff"
+                                strokeWidth={0.005}
+                              />
+                              {/* Floating Danger Tag */}
+                              <g transform={`translate(${x}, ${badgeY})`}>
+                                <rect
+                                  width={badgeW}
+                                  height={badgeH}
+                                  rx={0.004}
+                                  fill="#dc2626"
+                                  stroke="#ffffff"
+                                  strokeWidth={0.002}
+                                />
+                                <text
+                                  x={badgeW / 2}
+                                  y={badgeH * 0.72}
+                                  fill="#ffffff"
+                                  fontSize={0.016}
+                                  fontWeight="900"
+                                  textAnchor="middle"
+                                  fontFamily="system-ui, sans-serif"
+                                >
+                                  🚨 FAKE
+                                </text>
+                              </g>
+                            </>
+                          )}
+
+                          {/* REAL SEED EFFECTS */}
+                          {isReal && (
+                            <>
+                              {/* Subtle authentic green tint */}
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="rgba(34, 197, 94, 0.16)"
+                              />
+                              {/* Clean emerald verification border with soft glow */}
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="none"
+                                stroke="#22c55e"
+                                strokeWidth={0.005}
+                                filter="url(#realGlowFilter)"
+                              />
+                              {/* Subtle green corner check accents */}
+                              <path
+                                d={`M ${x} ${y + cLen} L ${x} ${y} L ${x + cLen} ${y}
+                                    M ${x + w - cLen} ${y} L ${x + w} ${y} L ${x + w} ${y + cLen}
+                                    M ${x} ${y + h - cLen} L ${x} ${y + h} L ${x + cLen} ${y + h}
+                                    M ${x + w - cLen} ${y + h} L ${x + w} ${y + h} L ${x + w} ${y + h - cLen}`}
+                                fill="none"
+                                stroke="#86efac"
+                                strokeWidth={0.004}
+                              />
+                              {/* Verification Tag */}
+                              <g transform={`translate(${x}, ${badgeY})`}>
+                                <rect
+                                  width={badgeW}
+                                  height={badgeH}
+                                  rx={0.004}
+                                  fill="#15803d"
+                                  stroke="#86efac"
+                                  strokeWidth={0.002}
+                                />
+                                <text
+                                  x={badgeW / 2}
+                                  y={badgeH * 0.72}
+                                  fill="#ffffff"
+                                  fontSize={0.016}
+                                  fontWeight="bold"
+                                  textAnchor="middle"
+                                  fontFamily="system-ui, sans-serif"
+                                >
+                                  ✓ REAL
+                                </text>
+                              </g>
+                            </>
+                          )}
+
+                          {/* LOW QUALITY SEED EFFECTS */}
+                          {isLow && (
+                            <>
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="rgba(245, 158, 11, 0.14)"
+                              />
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="none"
+                                stroke="#f59e0b"
+                                strokeWidth={0.005}
+                                strokeDasharray="0.02 0.01"
+                              />
+                              <g transform={`translate(${x}, ${badgeY})`}>
+                                <rect
+                                  width={badgeW}
+                                  height={badgeH}
+                                  rx={0.004}
+                                  fill="#b45309"
+                                  stroke="#fde68a"
+                                  strokeWidth={0.002}
+                                />
+                                <text
+                                  x={badgeW / 2}
+                                  y={badgeH * 0.72}
+                                  fill="#ffffff"
+                                  fontSize={0.015}
+                                  fontWeight="bold"
+                                  textAnchor="middle"
+                                  fontFamily="system-ui, sans-serif"
+                                >
+                                  ⚠️ LOW
+                                </text>
+                              </g>
+                            </>
+                          )}
+
+                          {/* UNCERTAIN SEED EFFECTS */}
+                          {!isFake && !isReal && !isLow && (
+                            <>
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="rgba(156, 163, 175, 0.12)"
+                              />
+                              <rect
+                                x={x}
+                                y={y}
+                                width={w}
+                                height={h}
+                                fill="none"
+                                stroke="#9ca3af"
+                                strokeWidth={0.004}
+                                strokeDasharray="0.015 0.01"
+                              />
+                              <g transform={`translate(${x}, ${badgeY})`}>
+                                <rect
+                                  width={badgeW}
+                                  height={badgeH}
+                                  rx={0.004}
+                                  fill="#4b5563"
+                                  stroke="#d1d5db"
+                                  strokeWidth={0.002}
+                                />
+                                <text
+                                  x={badgeW / 2}
+                                  y={badgeH * 0.72}
+                                  fill="#ffffff"
+                                  fontSize={0.014}
+                                  fontWeight="bold"
+                                  textAnchor="middle"
+                                  fontFamily="system-ui, sans-serif"
+                                >
+                                  ? UNCERTAIN
+                                </text>
+                              </g>
+                            </>
+                          )}
+                        </g>
+                      );
+                    })}
+                  </AnimatePresence>
+                </svg>
+
+                {/* Hover Tooltip */}
+                {hoveredDetection && (
+                  <div
+                    className="interactive-tooltip"
+                    style={{
+                      left: tooltipPos.x + 10,
+                      top: tooltipPos.y - 36,
+                    }}
+                  >
+                    <strong>{hoveredDetection.class_name}</strong>{' '}
+                    {(hoveredDetection.confidence * 100).toFixed(1)}%
+                  </div>
+                )}
+              </div>
+            )}
+
             <div className="overlay-legend-row">
-              <div className="legend-item"><span className="legend-dot real"></span><span>Real</span></div>
-              <div className="legend-item"><span className="legend-dot fake"></span><span>Fake</span></div>
-              <div className="legend-item"><span className="legend-dot low"></span><span>Low Quality</span></div>
-              <div className="legend-item"><span className="legend-dot uncertain"></span><span>Uncertain</span></div>
+              <div className="legend-item"><span className="legend-dot real"></span><span>✓ Real Seed (Authentic)</span></div>
+              <div className="legend-item"><span className="legend-dot fake"></span><span>🚨 Fake Seed (Suspected Counterfeit)</span></div>
+              <div className="legend-item"><span className="legend-dot low"></span><span>⚠️ Low Quality / Damaged</span></div>
+              <div className="legend-item"><span className="legend-dot uncertain"></span><span>? Uncertain</span></div>
             </div>
           </div>
         )}
